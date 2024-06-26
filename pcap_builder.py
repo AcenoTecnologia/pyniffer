@@ -13,6 +13,7 @@ import struct
 import time
 from datetime import datetime, timezone
 
+from wireshark_pipe_factory import WiresharkPipeFactory
 
 """
 This class is responsible for building a pcap file.
@@ -29,16 +30,11 @@ The .pcap file is organized as follows:
 class PcapBuilder():
     """
     Pcap info can be found at: https://wiki.wireshark.org/Development/LibpcapOutFormat
-    The pcap header has the following structure:
-    Magic Number: 4 bytes - Defined number to identify endianess
-    Version Major: 2 bytes - Major version of the pcap file format (Commonly 2)
-    Version Minor: 2 bytes - Minor version of the pcap file format (Commonly 4)
-    Thiszone: 4 bytes - Time zone offset
-    Sigfigs: 4 bytes - Accuracy of timestamps (0 for now)
-    Snaplen: 4 bytes - Maximum length of captured packets
-    Network: 4 bytes - Data link type (https://www.tcpdump.org/linktypes.html)
+    Defult timezone defined as GMT-3 (BRT) 
+    Network type 228 is the value for Raw IPV4.
     """
     def __init__(self):
+        self.is_pipe = False
         # File in which the pcap will be saved
         self.pcapOut = None
 
@@ -107,34 +103,58 @@ class PcapBuilder():
 
     """
     Opens a file to write the pcap data.
+    Returns True if the file/ pipe was opened successfully, False otherwise.
     """
-    def open_pcap(self, output_name, is_pipe=False):
-        self.pcapOut = open(output_name, 'wb')
+    def open_pcap(self, output_name, is_pipe=False) -> bool:
+        self.is_pipe = is_pipe
+        if is_pipe:
+            self.pcapOut = WiresharkPipeFactory.create_wireshark_pipe()
+            self.pcapOut.open_pipe(output_name)
+            self.pcapOut.connect()
+
+        if not is_pipe:
+            self.pcapOut = open(output_name, 'wb')
+
         current_time = int(time.time())
         # Mark initial time
         self.initial_time += current_time
 
+        return False if self.pcapOut is None else True
+
     """
     Closes the PCAP file.
+
     """
     def close_pcap(self):
-        self.pcapOut.close()
+        if not self.is_pipe:
+            self.pcapOut.close()
+        self.pcapOut.close_pipe()
         pass
 
     """
     Writes the global header to the pcap file.
+    The pcap header has the following structure:
+    Magic Number: 4 bytes - Defined number to identify endianess
+    Version Major: 2 bytes - Major version of the pcap file format (Commonly 2)
+    Version Minor: 2 bytes - Minor version of the pcap file format (Commonly 4)
+    Thiszone: 4 bytes - Time zone offset
+    Sigfigs: 4 bytes - Accuracy of timestamps (0 for now)
+    Snaplen: 4 bytes - Maximum length of captured packets
+    Network: 4 bytes - Data link type (https://www.tcpdump.org/linktypes.html)
     """
-    def write_global_header(self):
-        # Write global header
-        self.pcapOut.write(struct.pack('I', self.global_header['magic_number']))   # guint32 -> 'I' em Python
-        self.pcapOut.write(struct.pack('H', self.global_header['version_major']))  # guint16 -> 'H' em Python
-        self.pcapOut.write(struct.pack('H', self.global_header['version_minor']))  # guint16 -> 'H' em Python
-        self.pcapOut.write(struct.pack('i', self.global_header['thiszone']))       # gint32 -> 'i' em Python
-        self.pcapOut.write(struct.pack('I', self.global_header['sigfigs']))        # guint32 -> 'I' em Python
-        self.pcapOut.write(struct.pack('I', self.global_header['snaplen']))        # guint32 -> 'I' em Python
-        self.pcapOut.write(struct.pack('I', self.global_header['network']))        # guint32 -> 'I' em Python
-        
-        self.pcapOut.flush()
+    def write_global_header(self) -> None:
+        # Write global header to a buffer
+        global_header_buffer = bytearray()
+        global_header_buffer.extend(struct.pack('I', self.global_header['magic_number']))   # guint32 -> 'I' em Python
+        global_header_buffer.extend(struct.pack('H', self.global_header['version_major']))  # guint16 -> 'H' em Python
+        global_header_buffer.extend(struct.pack('H', self.global_header['version_minor']))  # guint16 -> 'H' em Python
+        global_header_buffer.extend(struct.pack('i', self.global_header['thiszone']))       # gint32 -> 'i' em Python
+        global_header_buffer.extend(struct.pack('I', self.global_header['sigfigs']))        # guint32 -> 'I' em Python
+        global_header_buffer.extend(struct.pack('I', self.global_header['snaplen']))        # guint32 -> 'I' em Python
+        global_header_buffer.extend(struct.pack('I', self.global_header['network']))        # guint32 -> 'I' em Python
+
+        # Write global header from buffer
+        self.pcapOut.write(global_header_buffer)
         pass
 
     """
@@ -150,7 +170,7 @@ class PcapBuilder():
     - fcs: Frame Check Sequence bytes.
     - eof: End of Frame bytes.
     """
-    def write_packet_header(self, packet):
+    def write_packet_header(self, packet) -> None:
 
         # Calculate total length of the packet
         self.header_lengths['command_data_lenght'] = len(packet['command_data'])
@@ -168,12 +188,15 @@ class PcapBuilder():
             self.is_first_packet = False
             self.initial_time -= packet_time_seconds
 
-        self.pcapOut.write(struct.pack('I', int(self.initial_time + packet_time_seconds)))     # guint32 -> 'I' em Python
-        self.pcapOut.write(struct.pack('I', int(packet_time_milliseconds)))    # guint32 -> 'I' em Python
-        self.pcapOut.write(struct.pack('I', int(self.total_length)))   # guint32 -> 'I' em Python
-        self.pcapOut.write(struct.pack('I', int(self.total_length)))   # guint32 -> 'I' em Python
+        # Write packet header to a buffer
+        packet_header_buffer = bytearray()
+        packet_header_buffer.extend(struct.pack('I', int(self.initial_time + packet_time_seconds)))     # guint32 -> 'I' em Python
+        packet_header_buffer.extend(struct.pack('I', int(packet_time_milliseconds)))    # guint32 -> 'I' em Python
+        packet_header_buffer.extend(struct.pack('I', int(self.total_length)))   # guint32 -> 'I' em Python
+        packet_header_buffer.extend(struct.pack('I', int(self.total_length)))   # guint32 -> 'I' em Python
 
-        self.pcapOut.flush()
+        # Write packet header from buffer
+        self.pcapOut.write(packet_header_buffer)
         pass
 
     """
@@ -205,12 +228,10 @@ class PcapBuilder():
         So, those headers will be written as placeholders.
         """
 
-        # Write ipv4 header (placeholder)
+        # Write ipv4 and udp header (placeholder)
         self.ipv4_header = self.ipv4_header[:2] + struct.pack('>H', self.total_length) + self.ipv4_header[4:]
-        self.pcapOut.write(self.ipv4_header)
         self.udp_header = self.udp_header[:4] + struct.pack('>H', (self.total_length - 20)) + self.udp_header[6:]
-        # Write UDP header (placeholder)
-        self.pcapOut.write(self.udp_header)
+
 
         # Write TI packet info
         ti_packet_info = {
@@ -234,20 +255,29 @@ class PcapBuilder():
             'payload': packet['command_data'],
         }
 
-        # Write data
-        self.pcapOut.write(struct.pack('4B', *ti_packet_info['header']))
-        self.pcapOut.write(struct.pack('H', ti_packet_info['interface']))
-        self.pcapOut.write(ti_packet_info['separator'])
-        self.pcapOut.write(bytes([ti_packet_info['phy']]))
-        self.pcapOut.write(struct.pack('4B', *ti_packet_info['frequency']))
-        self.pcapOut.write(struct.pack('2B', *ti_packet_info['channel']))
-        self.pcapOut.write(bytes.fromhex(ti_packet_info['rssi']))
-        self.pcapOut.write(bytes.fromhex(ti_packet_info['fcs']))
-        self.pcapOut.write(ti_packet_info['payload'])
+        # Write data to a buffer
+        buffer = bytearray()
+        buffer.extend(self.ipv4_header)
+        buffer.extend(self.udp_header)
+        buffer.extend(struct.pack('4B', *ti_packet_info['header']))
+        buffer.extend(struct.pack('H', ti_packet_info['interface']))
+        buffer.extend(ti_packet_info['separator'])
+        buffer.extend(bytes([ti_packet_info['phy']]))
+        buffer.extend(struct.pack('4B', *ti_packet_info['frequency']))
+        buffer.extend(struct.pack('2B', *ti_packet_info['channel']))
+        buffer.extend(bytes.fromhex(ti_packet_info['rssi']))
+        buffer.extend(bytes.fromhex(ti_packet_info['fcs']))
+        buffer.extend(ti_packet_info['payload'])
 
-        self.pcapOut.flush()
+        # Write data from buffer
+        self.pcapOut.write(buffer)
+
+
         pass
 
+    """
+    Aux function to convert big endian string to little endian string.
+    """
     def _big_endian_to_little_endian(self, big_endian):
         bytes_array = [big_endian[i:i+2] for i in range(0, len(big_endian), 2)]
         bytes_array.reverse()

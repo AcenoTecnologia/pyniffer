@@ -13,6 +13,9 @@ import serial
 import time
 from enum import Enum
 
+"""
+Enum to represent the state of the TI Sniffer device.
+"""
 class State(Enum):
     STATE_WAITING_FOR_COMMAND = 0
     STATE_INIT = 1
@@ -105,8 +108,6 @@ class TISnifferController:
         if not self.ser.is_open:
             self._debug('[ERROR] Serial port {} could not be opened.'.format(self.port))
             return False
-        
-
 
         self._change_state(State.STATE_WAITING_FOR_COMMAND)
         self.stop()
@@ -118,10 +119,9 @@ class TISnifferController:
         self._debug('--PHY: {}'.format(hex(self.metadata['phy'])))
         self._debug('--Frequency: {}'.format(int.from_bytes(self.metadata['frequency'], byteorder='little')))
         self._debug('--Channel: {}'.format(int.from_bytes(self.metadata['channel'], byteorder='little')))
-        self._debug('[INFO] Getting board information through ping command.')
 
+        self._debug('[INFO] Getting board information through ping command.')
         self.ping()
-        
 
         return True
 
@@ -144,6 +144,8 @@ class TISnifferController:
     For example, 2450.0 MHz is 0x0992 and should be sent as [0x92 0x09 0x00 0x00].
     The TI Sniffer documentation has a table with PHY indexes for each board.
     This command only works if the sniffer is on the STOPPED state.
+    This method accepts the frequency in MHz or in the format [0x92 0x09 0x00 0x00].
+    Returns True if the configuration was successful, False otherwise.
     """
     def configure(self, frequency, phy) -> bool:
         if self.state != State.STATE_STOPPED:
@@ -177,11 +179,12 @@ class TISnifferController:
             fractionary_frequency = int.from_bytes(fractionary_frequency, byteorder='little')
             frequency = whole_frequency + (fractionary_frequency / 65536)
             self._debug('[INFO] Frequency configured successfully to {} MHz.'.format(frequency))
+        if response['command_data'] != '00':
+            self._debug('[INFO] Frequency could not be configured correctly to {} MHz.'.format(frequency))
+            return False
 
         # Configure PHY command
         phy_command = bytes(self.sof + self.phy_command_base + [phy] + [self._calculate_fcs(self.phy_command_base, [phy])] + self.eof)
-
-        
 
         # Configure PHY
         self.ser.write(phy_command)
@@ -190,14 +193,18 @@ class TISnifferController:
         if response['command_data'] == '00':
             self._debug('[INFO] PHY configured successfully to {}'.format(hex(phy)))
             self.metadata['phy'] = phy
+        if response['command_data'] != '00':
+            self._debug('[INFO] PHY could not be configured correctly to {}'.format(hex(phy)))
+            return False
 
-
-        pass
+        return True
 
     """
     Starts the sniffing process on the TI Sniffer device.
     From this point on, the device will start receiving packets.
     Those packets can be read by the user using the stream method.
+    This method does not block the IO.
+    Returns True if the start command was successfully sent, False otherwise.
     """
     def start(self) -> bool:
         # Send the start command to the device
@@ -212,6 +219,7 @@ class TISnifferController:
     """
     Stops the sniffing process on the TI Sniffer device.
     The device will stop receiving packets.
+    Returns True if the stop command was successfully sent, False otherwise.
     """
     def stop(self) -> bool:
         # Send the stop command to the device
@@ -225,6 +233,8 @@ class TISnifferController:
     
     """
     The ping command is used to get the board information.
+    Board information includes the Chip Id, Chip Revision, FW Id and FW Revision.
+    Returns True if the ping command was successfully sent, False otherwise.
     """
     def ping(self) -> bool:
         # Send the ping command to the device
@@ -251,7 +261,16 @@ class TISnifferController:
 
     """
     If the sniffer is in the STARTED state, this method will start streaming packets from the device.
-    Each recieved packet will call a callback function called process_packet.
+    Each recieved packet will call a callback function called process_packet if the return info is 0xc0 (Data streaming from the sniffer).
+    This callback function should be implemented by the, takes a packet as input and have no return.
+    Bytes are sent in little endian format.
+
+    If read_time is -1, the method will stream packets indefinitely (Blocking IO until interrupted).
+    If read_time is a positive number, the method will stream packets for read_time seconds.
+    Actual Read Time can surpass the read_time because it will wait until the end of the next packet.
+
+    Returns True if the streaming was successful, False otherwise.
+    Does not return anything if the read_time is -1.
     """
     def stream(self, packet_callback, read_time = -1) -> bool:
         if read_time == -1:
@@ -265,13 +284,14 @@ class TISnifferController:
         
         # Executes the loop for read_time seconds or forever if read_time is -1
         start_time = time.time()
-        while read_time == -1 or time.time() - start_time < read_time:
+        while read_time == -1 or (time.time() - start_time) < read_time:
             packet = self._recieve_packet()
             packet.update(self.metadata)
             # If the packet is a stream packet, call the packet_callback function
             if packet['packet_info'] == 'c0':
+                self._debug('[INFO] Packet received. Calling packet callback after {:.3f} seconds.'.format(time.time() - start_time))
                 packet_callback(packet)
-        pass
+        return True
 
     """
     Receives a packet from the TI Sniffer device.
