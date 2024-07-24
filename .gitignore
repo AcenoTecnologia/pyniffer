@@ -1,3 +1,4 @@
 # Ignore the basePcap folder
 basePcap/
 __pycache__/
+*.pcap
