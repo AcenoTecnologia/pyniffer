@@ -3,7 +3,7 @@
 
 The [SmartRF Packet Sniffer 2](https://www.ti.com/tool/PACKET-SNIFFER) from [Texas Instruments](https://www.ti.com) is a useful tool for sniffing packet data using some of their devices. It can save sniffed packets to a .pcap files and send packets through a pipe for live view. It also support multiple devices to be connected at once. While this script does not implement all of [SmartRF Packet Sniffer 2](https://www.ti.com/tool/PACKET-SNIFFER) capabilities, it should be enough for basic usage.
 
-**This script was made as a proof-of-concept. [Tuxniffer](Tuxniffer) does the same as this script, but in a better way.**
+**This script was made as a proof-of-concept. [Tuxniffer](https://github.com/AcenoTecnologia/tuxniffer) does the same as this script, but in a better way.**
 
 ## Features
 
